@@ -4,6 +4,8 @@ import { authOptions } from '@/lib/auth';
 import { put } from '@vercel/blob';
 import { randomUUID } from 'crypto';
 
+export const dynamic = 'force-dynamic';
+
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
 const ALLOWED_MIME_TYPES: Record<string, string> = {

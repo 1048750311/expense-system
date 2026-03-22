@@ -4,6 +4,8 @@ import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { z } from 'zod';
 
+export const dynamic = 'force-dynamic';
+
 // バリデーションスキーマ（更新用）
 const updateExpenseSchema = z.object({
   categoryId: z.string().min(1).optional(),
