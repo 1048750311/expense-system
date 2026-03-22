@@ -9,7 +9,7 @@ const createExpenseSchema = z.object({
   categoryId: z.string().min(1, 'カテゴリIDは必須です'),
   description: z.string().min(1, '説明は必須です').max(1000, '説明は1000文字以内で入力してください'),
   amount: z.number().positive('金額は0より大きい値を入力してください'),
-  expenseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付形式が正しくありません'),
+  expenseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日付形式が正しくありません（YYYY-MM-DD）'),
   receiptStatus: z.enum(['none', 'available', 'uploaded']).optional().default('none'),
   receiptPath: z.string().optional(),
   transportType: z.enum(['train', 'bus', 'car', 'other']).optional(),
@@ -31,18 +31,22 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
 
     // クエリパラメータの取得
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '10');
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1'));
+    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '10')));
     const status = searchParams.get('status');
     const categoryId = searchParams.get('categoryId');
     const userId = searchParams.get('userId');
     const startDate = searchParams.get('startDate');
     const endDate = searchParams.get('endDate');
     const sortBy = searchParams.get('sortBy') || 'createdAt';
-    const sortOrder = searchParams.get('sortOrder') || 'desc';
+    const sortOrder = (searchParams.get('sortOrder') || 'desc') as 'asc' | 'desc';
+
+    // 許可されたソートフィールド
+    const allowedSortFields = ['createdAt', 'updatedAt', 'expenseDate', 'amount', 'status'];
+    const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'createdAt';
 
     // フィルタ条件の構築
-    const where: any = {};
+    const where: Record<string, unknown> = {};
 
     if (status) {
       where.status = status;
@@ -57,18 +61,11 @@ export async function GET(request: NextRequest) {
     }
 
     if (startDate || endDate) {
-      where.expenseDate = {};
-      if (startDate) {
-        where.expenseDate.gte = new Date(startDate);
-      }
-      if (endDate) {
-        where.expenseDate.lte = new Date(endDate);
-      }
+      where.expenseDate = {
+        ...(startDate ? { gte: new Date(startDate) } : {}),
+        ...(endDate ? { lte: new Date(endDate) } : {}),
+      };
     }
-
-    // ソート条件
-    const orderBy: any = {};
-    orderBy[sortBy] = sortOrder;
 
     // 総件数取得
     const total = await prisma.expense.count({ where });
@@ -78,28 +75,16 @@ export async function GET(request: NextRequest) {
       where,
       include: {
         user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
+          select: { id: true, name: true, email: true },
         },
         category: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
+          select: { id: true, name: true, code: true },
         },
         approver: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
+          select: { id: true, name: true, email: true },
         },
       },
-      orderBy,
+      orderBy: { [validSortBy]: sortOrder },
       skip: (page - 1) * limit,
       take: limit,
     });
@@ -107,13 +92,9 @@ export async function GET(request: NextRequest) {
     // 集計データ
     const summary = await prisma.expense.aggregate({
       where,
-      _sum: {
-        amount: true,
-      },
+      _sum: { amount: true },
       _count: true,
     });
-
-    const totalPages = Math.ceil(total / limit);
 
     return NextResponse.json({
       success: true,
@@ -123,7 +104,7 @@ export async function GET(request: NextRequest) {
           page,
           limit,
           total,
-          totalPages,
+          totalPages: Math.ceil(total / limit),
         },
         summary: {
           totalAmount: summary._sum.amount || 0,
@@ -131,7 +112,6 @@ export async function GET(request: NextRequest) {
         },
       },
     });
-
   } catch (error) {
     console.error('GET /api/expenses error:', error);
     return NextResponse.json(
@@ -149,6 +129,14 @@ export async function POST(request: NextRequest) {
     if (!session?.user) {
       return NextResponse.json(
         { success: false, error: '認証が必要です', code: 'UNAUTHORIZED' },
+        { status: 401 }
+      );
+    }
+
+    const userId = (session.user as { id?: string }).id;
+    if (!userId) {
+      return NextResponse.json(
+        { success: false, error: 'ユーザー情報が見つかりません', code: 'USER_NOT_FOUND' },
         { status: 401 }
       );
     }
@@ -178,7 +166,6 @@ export async function POST(request: NextRequest) {
     const category = await prisma.expenseCategory.findUnique({
       where: { id: data.categoryId },
     });
-
     if (!category) {
       return NextResponse.json(
         { success: false, error: '指定されたカテゴリが見つかりません', code: 'CATEGORY_NOT_FOUND' },
@@ -186,12 +173,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ユーザーの取得（Azure AD IDから）
-    // TODO: セッションからユーザーIDを取得する方法を実装
-    // 現時点では仮のユーザーIDを使用
-    const userId = 'user_' + Date.now(); // 仮実装
-
-    // 経費の作成
+    // 経費の作成（初期ステータスは draft）
     const expense = await prisma.expense.create({
       data: {
         userId,
@@ -207,18 +189,10 @@ export async function POST(request: NextRequest) {
       },
       include: {
         user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
+          select: { id: true, name: true, email: true },
         },
         category: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
+          select: { id: true, name: true, code: true },
         },
       },
     });
@@ -231,7 +205,6 @@ export async function POST(request: NextRequest) {
       },
       { status: 201 }
     );
-
   } catch (error) {
     console.error('POST /api/expenses error:', error);
     return NextResponse.json(

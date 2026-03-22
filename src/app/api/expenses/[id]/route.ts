@@ -19,6 +19,14 @@ const updateExpenseSchema = z.object({
   rejectReason: z.string().optional(),
 });
 
+// ステータス遷移ルール
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  draft: ['submitted'],
+  submitted: ['approved', 'rejected'],
+  approved: [],
+  rejected: ['draft'],
+};
+
 // PUT /api/expenses/[id] - 経費更新
 export async function PUT(
   request: NextRequest,
@@ -30,6 +38,14 @@ export async function PUT(
     if (!session?.user) {
       return NextResponse.json(
         { success: false, error: '認証が必要です', code: 'UNAUTHORIZED' },
+        { status: 401 }
+      );
+    }
+
+    const sessionUser = session.user as { id?: string };
+    if (!sessionUser.id) {
+      return NextResponse.json(
+        { success: false, error: 'ユーザー情報が見つかりません', code: 'USER_NOT_FOUND' },
         { status: 401 }
       );
     }
@@ -54,13 +70,10 @@ export async function PUT(
       );
     }
 
-    const updateData = validationResult.data;
+    const input = validationResult.data;
 
     // 経費の存在チェック
-    const existingExpense = await prisma.expense.findUnique({
-      where: { id },
-    });
-
+    const existingExpense = await prisma.expense.findUnique({ where: { id } });
     if (!existingExpense) {
       return NextResponse.json(
         { success: false, error: '経費が見つかりません', code: 'EXPENSE_NOT_FOUND' },
@@ -68,47 +81,41 @@ export async function PUT(
       );
     }
 
+    // 認可チェック：承認/却下はどのユーザーも可。内容変更は本人のみ
+    const isOwner = existingExpense.userId === sessionUser.id;
+    const isStatusChange = input.status !== undefined;
+    const hasContentChange = Object.keys(input).some(k => k !== 'status' && k !== 'approvalComments' && k !== 'rejectReason');
+
+    if (hasContentChange && !isOwner) {
+      return NextResponse.json(
+        { success: false, error: 'この経費を編集する権限がありません', code: 'FORBIDDEN' },
+        { status: 403 }
+      );
+    }
+
     // ステータス遷移のバリデーション
-    if (updateData.status) {
+    if (isStatusChange) {
       const currentStatus = existingExpense.status;
-      const newStatus = updateData.status;
+      const newStatus = input.status as string;
+      const allowed = VALID_TRANSITIONS[currentStatus] ?? [];
 
-      // ステータス遷移ルール
-      const validTransitions: Record<string, string[]> = {
-        draft: ['submitted'],
-        submitted: ['approved', 'rejected'],
-        approved: [], // 変更不可
-        rejected: ['draft'], // 再提出可能
-      };
-
-      if (!validTransitions[currentStatus]?.includes(newStatus)) {
+      if (!allowed.includes(newStatus)) {
         return NextResponse.json(
           {
             success: false,
-            error: `ステータスを ${currentStatus} から ${newStatus} に変更することはできません`,
-            code: 'INVALID_STATUS_TRANSITION'
+            error: `ステータスを "${currentStatus}" から "${newStatus}" に変更することはできません`,
+            code: 'INVALID_STATUS_TRANSITION',
           },
           { status: 400 }
         );
       }
-
-      // 承認/却下時の処理
-      if (newStatus === 'approved' || newStatus === 'rejected') {
-        updateData.approverUserId = 'approver_' + Date.now(); // 仮実装
-        updateData.approvalDate = new Date();
-      }
-
-      if (newStatus === 'submitted') {
-        updateData.submittedAt = new Date();
-      }
     }
 
-    // カテゴリIDの存在チェック（更新する場合）
-    if (updateData.categoryId) {
+    // カテゴリの存在チェック（更新する場合）
+    if (input.categoryId) {
       const category = await prisma.expenseCategory.findUnique({
-        where: { id: updateData.categoryId },
+        where: { id: input.categoryId },
       });
-
       if (!category) {
         return NextResponse.json(
           { success: false, error: '指定されたカテゴリが見つかりません', code: 'CATEGORY_NOT_FOUND' },
@@ -117,9 +124,31 @@ export async function PUT(
       }
     }
 
-    // 日付変換
-    if (updateData.expenseDate) {
-      updateData.expenseDate = new Date(updateData.expenseDate);
+    // DB更新データの構築（ステータス遷移に応じた付加情報を設定）
+    const updateData: Record<string, unknown> = {
+      ...(input.categoryId !== undefined && { categoryId: input.categoryId }),
+      ...(input.description !== undefined && { description: input.description }),
+      ...(input.amount !== undefined && { amount: input.amount }),
+      ...(input.expenseDate !== undefined && { expenseDate: new Date(input.expenseDate) }),
+      ...(input.receiptStatus !== undefined && { receiptStatus: input.receiptStatus }),
+      ...(input.receiptPath !== undefined && { receiptPath: input.receiptPath }),
+      ...(input.transportType !== undefined && { transportType: input.transportType }),
+      ...(input.roundTrip !== undefined && { roundTrip: input.roundTrip }),
+      ...(input.approvalComments !== undefined && { approvalComments: input.approvalComments }),
+      ...(input.rejectReason !== undefined && { rejectReason: input.rejectReason }),
+    };
+
+    if (input.status) {
+      updateData.status = input.status;
+
+      if (input.status === 'submitted') {
+        updateData.submittedAt = new Date();
+      }
+
+      if (input.status === 'approved' || input.status === 'rejected') {
+        updateData.approverUserId = sessionUser.id;
+        updateData.approvalDate = new Date();
+      }
     }
 
     // 経費の更新
@@ -128,25 +157,13 @@ export async function PUT(
       data: updateData,
       include: {
         user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
+          select: { id: true, name: true, email: true },
         },
         category: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
+          select: { id: true, name: true, code: true },
         },
         approver: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
+          select: { id: true, name: true, email: true },
         },
       },
     });
@@ -156,7 +173,6 @@ export async function PUT(
       data: updatedExpense,
       message: '経費が正常に更新されました',
     });
-
   } catch (error) {
     console.error('PUT /api/expenses/[id] error:', error);
     return NextResponse.json(
@@ -181,17 +197,30 @@ export async function DELETE(
       );
     }
 
+    const sessionUser = session.user as { id?: string };
+    if (!sessionUser.id) {
+      return NextResponse.json(
+        { success: false, error: 'ユーザー情報が見つかりません', code: 'USER_NOT_FOUND' },
+        { status: 401 }
+      );
+    }
+
     const { id } = params;
 
     // 経費の存在チェック
-    const existingExpense = await prisma.expense.findUnique({
-      where: { id },
-    });
-
+    const existingExpense = await prisma.expense.findUnique({ where: { id } });
     if (!existingExpense) {
       return NextResponse.json(
         { success: false, error: '経費が見つかりません', code: 'EXPENSE_NOT_FOUND' },
         { status: 404 }
+      );
+    }
+
+    // 認可チェック：本人のみ削除可
+    if (existingExpense.userId !== sessionUser.id) {
+      return NextResponse.json(
+        { success: false, error: 'この経費を削除する権限がありません', code: 'FORBIDDEN' },
+        { status: 403 }
       );
     }
 
@@ -203,16 +232,12 @@ export async function DELETE(
       );
     }
 
-    // 経費の削除
-    await prisma.expense.delete({
-      where: { id },
-    });
+    await prisma.expense.delete({ where: { id } });
 
     return NextResponse.json({
       success: true,
       message: '経費が正常に削除されました',
     });
-
   } catch (error) {
     console.error('DELETE /api/expenses/[id] error:', error);
     return NextResponse.json(

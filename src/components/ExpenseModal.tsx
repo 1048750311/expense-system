@@ -1,16 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+
+interface Category {
+  id: string;
+  name: string;
+  code: string;
+}
 
 interface ExpenseModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (data: ExpenseFormData) => void;
+  onSubmit: (data: ExpenseFormData) => Promise<void>;
 }
 
 export interface ExpenseFormData {
   date: string;
-  category: string;
+  categoryId: string;
+  category: string; // 表示用カテゴリ名
   transportation: string;
   tripType: "one-way" | "round-trip";
   receipt: "yes" | "no";
@@ -19,25 +26,22 @@ export interface ExpenseFormData {
   file?: File;
 }
 
-const categories = [
-  "交通費",
-  "会議費",
-  "交際費",
-  "雑費",
-  "その他"
-];
-
 const transportationOptions = [
   { value: "train", label: "電車" },
   { value: "bus", label: "バス" },
+  { value: "car", label: "作業車" },
   { value: "other", label: "その他" },
-  { value: "company-car", label: "作業車" }
 ];
 
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+const ALLOWED_TYPES = ["image/jpeg", "image/png", "application/pdf"];
+
 export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModalProps) {
+  const [categories, setCategories] = useState<Category[]>([]);
   const [formData, setFormData] = useState<ExpenseFormData>({
     date: new Date().toISOString().split("T")[0],
-    category: "交通費",
+    categoryId: "",
+    category: "",
     transportation: "train",
     tripType: "one-way",
     receipt: "yes",
@@ -45,37 +49,74 @@ export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModal
     description: "",
   });
   const [file, setFile] = useState<File | null>(null);
+  const [fileError, setFileError] = useState<string>("");
+  const [submitError, setSubmitError] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // カテゴリをAPIから取得
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch("/api/expenses/categories")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.data.length > 0) {
+          setCategories(data.data);
+          setFormData((prev) => ({
+            ...prev,
+            categoryId: data.data[0].id,
+            category: data.data[0].name,
+          }));
+        }
+      })
+      .catch(() => {/* カテゴリ取得失敗は無視 */});
+  }, [isOpen]);
+
   const handleInputChange = (field: keyof ExpenseFormData, value: string | number) => {
-    setFormData(prev => ({
+    setFormData((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleCategoryChange = (categoryId: string) => {
+    const selected = categories.find((c) => c.id === categoryId);
+    setFormData((prev) => ({
       ...prev,
-      [field]: value
+      categoryId,
+      category: selected?.name ?? "",
     }));
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) {
-      setFile(selectedFile);
+    setFileError("");
+    const selected = e.target.files?.[0];
+    if (!selected) return;
+
+    if (!ALLOWED_TYPES.includes(selected.type)) {
+      setFileError("jpg、png、pdf のみアップロードできます");
+      e.target.value = "";
+      return;
     }
+    if (selected.size > MAX_FILE_SIZE) {
+      setFileError(`ファイルサイズは5MB以下にしてください（現在: ${(selected.size / 1024 / 1024).toFixed(1)}MB）`);
+      e.target.value = "";
+      return;
+    }
+    setFile(selected);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.categoryId) return;
+
+    setSubmitError("");
     setIsSubmitting(true);
 
     try {
-      const submitData = {
-        ...formData,
-        file: file || undefined
-      };
-      await onSubmit(submitData);
+      await onSubmit({ ...formData, file: file ?? undefined });
+      // 成功時のみ閉じてリセット
       onClose();
-      // フォームをリセット
       setFormData({
         date: new Date().toISOString().split("T")[0],
-        category: "交通費",
+        categoryId: categories[0]?.id ?? "",
+        category: categories[0]?.name ?? "",
         transportation: "train",
         tripType: "one-way",
         receipt: "yes",
@@ -84,7 +125,7 @@ export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModal
       });
       setFile(null);
     } catch (error) {
-      console.error("登録エラー:", error);
+      setSubmitError(error instanceof Error ? error.message : "登録に失敗しました");
     } finally {
       setIsSubmitting(false);
     }
@@ -92,6 +133,8 @@ export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModal
 
   const handleClose = () => {
     if (!isSubmitting) {
+      setSubmitError("");
+      setFileError("");
       onClose();
     }
   };
@@ -100,24 +143,27 @@ export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModal
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto">
-      {/* 背景オーバーレイ */}
       <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
         <div className="fixed inset-0 transition-opacity" aria-hidden="true">
           <div className="absolute inset-0 bg-gray-500 opacity-75" onClick={handleClose}></div>
         </div>
 
-        {/* モーダルコンテンツ */}
         <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
           <form onSubmit={handleSubmit}>
             {/* ヘッダー */}
             <div className="bg-gradient-to-r from-green-500 to-green-600 px-6 py-4">
-              <h3 className="text-lg font-medium text-white">
-                交通費精算登録
-              </h3>
+              <h3 className="text-lg font-medium text-white">交通費精算登録</h3>
             </div>
 
             {/* フォーム内容 */}
             <div className="px-6 py-6 space-y-6">
+              {/* エラーメッセージ */}
+              {submitError && (
+                <div className="bg-red-50 border border-red-300 text-red-700 px-4 py-3 rounded-md text-sm">
+                  {submitError}
+                </div>
+              )}
+
               {/* 月日 */}
               <div>
                 <label htmlFor="date" className="block text-sm font-medium text-gray-700 mb-2">
@@ -140,13 +186,17 @@ export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModal
                 </label>
                 <select
                   id="category"
-                  value={formData.category}
-                  onChange={(e) => handleInputChange("category", e.target.value)}
+                  value={formData.categoryId}
+                  onChange={(e) => handleCategoryChange(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                  required
                 >
-                  {categories.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
+                  {categories.length === 0 && (
+                    <option value="">読み込み中...</option>
+                  )}
+                  {categories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>
+                      {cat.name}
                     </option>
                   ))}
                 </select>
@@ -154,9 +204,7 @@ export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModal
 
               {/* 交通手段 */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-3">
-                  交通手段
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-3">交通手段</label>
                 <div className="space-y-2">
                   {transportationOptions.map((option) => (
                     <label key={option.value} className="flex items-center">
@@ -176,9 +224,7 @@ export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModal
 
               {/* 片道/往復 */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-3">
-                  片道/往復
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-3">片道/往復</label>
                 <div className="space-y-2">
                   <label className="flex items-center">
                     <input
@@ -207,9 +253,7 @@ export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModal
 
               {/* 領収書 */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-3">
-                  領収書
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-3">領収書</label>
                 <div className="space-y-2">
                   <label className="flex items-center">
                     <input
@@ -248,7 +292,7 @@ export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModal
                   onChange={(e) => handleInputChange("amount", parseInt(e.target.value) || 0)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
                   placeholder="0"
-                  min="0"
+                  min="1"
                   required
                 />
               </div>
@@ -272,7 +316,7 @@ export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModal
               {/* 添付ファイル */}
               <div>
                 <label htmlFor="file" className="block text-sm font-medium text-gray-700 mb-2">
-                  添付ファイル
+                  添付ファイル（領収書）
                 </label>
                 <div className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-md hover:border-gray-400 transition-colors">
                   <div className="space-y-1 text-center">
@@ -301,19 +345,18 @@ export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModal
                           name="file"
                           type="file"
                           className="sr-only"
-                          accept="image/*,.pdf,.doc,.docx"
+                          accept="image/jpeg,image/png,application/pdf"
                           onChange={handleFileChange}
                         />
                       </label>
                       <p className="pl-1">またはドラッグ＆ドロップ</p>
                     </div>
-                    <p className="text-xs text-gray-500">
-                      PNG, JPG, PDF, DOC 最大10MB
-                    </p>
+                    <p className="text-xs text-gray-500">JPG、PNG、PDF　最大5MB</p>
                     {file && (
-                      <p className="text-sm text-green-600 font-medium">
-                        選択済み: {file.name}
-                      </p>
+                      <p className="text-sm text-green-600 font-medium">選択済み: {file.name}</p>
+                    )}
+                    {fileError && (
+                      <p className="text-sm text-red-600">{fileError}</p>
                     )}
                   </div>
                 </div>
@@ -332,7 +375,7 @@ export default function ExpenseModal({ isOpen, onClose, onSubmit }: ExpenseModal
               </button>
               <button
                 type="submit"
-                disabled={isSubmitting}
+                disabled={isSubmitting || !formData.categoryId}
                 className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isSubmitting ? "登録中..." : "登録"}

@@ -126,22 +126,61 @@ export default function Dashboard() {
 
   // 新規登録ハンドラー
   const handleNewExpense = async (formData: ExpenseFormData) => {
-    // 新しい精算データを追加
+    // 1. 領収書ファイルがあればアップロード
+    let receiptPath: string | undefined;
+    let receiptStatus: "none" | "available" | "uploaded" =
+      formData.receipt === "yes" ? "available" : "none";
+
+    if (formData.file) {
+      const uploadForm = new FormData();
+      uploadForm.append("file", formData.file);
+
+      const uploadRes = await fetch("/api/expenses/upload", {
+        method: "POST",
+        body: uploadForm,
+      });
+      const uploadData = await uploadRes.json();
+
+      if (!uploadRes.ok) {
+        throw new Error(uploadData.error || "ファイルのアップロードに失敗しました");
+      }
+
+      receiptPath = uploadData.data.path;
+      receiptStatus = "uploaded";
+    }
+
+    // 2. 経費データを登録
+    const res = await fetch("/api/expenses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        categoryId: formData.categoryId,
+        description: formData.description,
+        amount: formData.amount,
+        expenseDate: formData.date,
+        transportType: formData.transportation,
+        roundTrip: formData.tripType === "round-trip",
+        receiptStatus,
+        receiptPath,
+      }),
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || "登録に失敗しました");
+    }
+
+    // 3. 一覧に追加
     const newExpense: ExpenseItem = {
-      id: Date.now().toString(),
+      id: data.data.id,
       date: formData.date,
       category: formData.category,
       description: formData.description,
       amount: formData.amount,
       status: "pending",
-      submitter: "田中太郎", // 現在のユーザー
+      submitter: "自分",
     };
-
-    setExpenses(prev => [newExpense, ...prev]);
-
-    // 実際のAPIコールはここに実装
-    console.log("新規精算登録:", formData);
-    setSortDirection("asc");
+    setExpenses((prev) => [newExpense, ...prev]);
   };
 
   // ソートハンドラー
