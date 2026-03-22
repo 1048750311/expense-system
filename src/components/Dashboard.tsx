@@ -168,7 +168,7 @@ export default function Dashboard() {
       })
       .catch(() => showToast("データの取得に失敗しました", "error"))
       .finally(() => setIsLoading(false));
-  }, [filterStatus, filterCategoryId, page, sortField, sortOrder]);
+  }, [filterStatus, filterCategoryId, page, sortField, sortOrder, showToast]);
 
   useEffect(() => { fetchExpenses(); }, [fetchExpenses]);
   useEffect(() => { setPage(1); }, [filterStatus, filterCategoryId]);
