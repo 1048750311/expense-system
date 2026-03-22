@@ -1,5 +1,6 @@
 import type { NextAuthOptions } from "next-auth";
 import AzureADProvider from "next-auth/providers/azure-ad";
+import CredentialsProvider from "next-auth/providers/credentials";
 import { prisma } from "./prisma";
 
 export const authOptions: NextAuthOptions = {
@@ -9,6 +10,31 @@ export const authOptions: NextAuthOptions = {
       clientSecret: process.env.AZURE_AD_CLIENT_SECRET || "",
       tenantId: process.env.AZURE_AD_TENANT_ID || "common",
     }),
+    // E2Eテスト専用: E2E_TEST=true のときのみ有効
+    ...(process.env.E2E_TEST === "true"
+      ? [
+          CredentialsProvider({
+            id: "e2e-credentials",
+            name: "E2E Test Login",
+            credentials: {
+              email: { label: "Email", type: "email" },
+              name: { label: "Name", type: "text" },
+            },
+            async authorize(credentials) {
+              if (!credentials?.email) return null;
+              const user = await prisma.user.upsert({
+                where: { email: credentials.email },
+                update: { name: credentials.name || "E2E Test User" },
+                create: {
+                  email: credentials.email,
+                  name: credentials.name || "E2E Test User",
+                },
+              });
+              return { id: user.id, email: user.email, name: user.name };
+            },
+          }),
+        ]
+      : []),
   ],
   pages: {
     signIn: "/login",
@@ -17,7 +43,7 @@ export const authOptions: NextAuthOptions = {
     strategy: "jwt",
   },
   callbacks: {
-    async jwt({ token, account, profile }) {
+    async jwt({ token, account, profile, user }) {
       if (account) {
         token.accessToken = account.access_token;
       }
@@ -31,7 +57,7 @@ export const authOptions: NextAuthOptions = {
         }
 
         // DBからユーザー情報を取得または作成
-        const user = await prisma.user.upsert({
+        const dbUser = await prisma.user.upsert({
           where: { email: profile.email || "" },
           update: {
             name: profile.name || "",
@@ -44,7 +70,13 @@ export const authOptions: NextAuthOptions = {
           },
         });
 
+        token.id = dbUser.id;
+      }
+      // E2Eテスト用 CredentialsProvider（profileはなくuserが渡る）
+      if (user && account?.provider === "e2e-credentials") {
         token.id = user.id;
+        token.name = user.name;
+        token.email = user.email;
       }
       return token;
     },
