@@ -51,9 +51,11 @@ export const authOptions: NextAuthOptions = {
         token.name = profile.name;
         token.email = profile.email;
 
-        // Azure ADのOIDをazureIdとして保存
-        if (profile.oid) {
-          token.azureId = profile.oid;
+        // Azure ADのOIDをazureIdとして保存（Azure AD固有プロパティ）
+        const azureProfile = profile as Record<string, unknown>;
+        const oid = azureProfile.oid as string | undefined;
+        if (oid) {
+          token.azureId = oid;
         }
 
         // DBからユーザー情報を取得または作成
@@ -61,12 +63,12 @@ export const authOptions: NextAuthOptions = {
           where: { email: profile.email || "" },
           update: {
             name: profile.name || "",
-            azureId: (profile.oid as string) || token.azureId,
+            azureId: oid || (token.azureId as string | undefined),
           },
           create: {
             email: profile.email || "",
             name: profile.name || "",
-            azureId: (profile.oid as string) || token.azureId,
+            azureId: oid || (token.azureId as string | undefined),
           },
         });
 

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { signOut } from "next-auth/react";
 import ExpenseModal, { ExpenseFormData, InitialExpenseData } from "./ExpenseModal";
+import { useToast } from "./Toast";
 
 interface ExpenseItem {
   id: string;
@@ -69,6 +70,8 @@ function toReceipt(receiptStatus: string): "yes" | "no" {
 }
 
 export default function Dashboard() {
+  const { showToast } = useToast();
+
   const [expenses,     setExpenses]     = useState<ExpenseItem[]>([]);
   const [isLoading,    setIsLoading]    = useState(true);
   const [categories,   setCategories]   = useState<Category[]>([]);
@@ -82,6 +85,10 @@ export default function Dashboard() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
   const [totals, setTotals] = useState({ today: 0, month: 0, year: 0 });
+  const [isTotalsLoading, setIsTotalsLoading] = useState(true);
+
+  // 削除ダイアログのキャンセルボタンref（フォーカス管理用）
+  const deleteCancelRef = useRef<HTMLButtonElement>(null);
 
   // モーダル状態
   const [isNewModalOpen,  setIsNewModalOpen]  = useState(false);
@@ -97,11 +104,12 @@ export default function Dashboard() {
     fetch("/api/expenses/categories")
       .then((r) => r.json())
       .then((d) => { if (d.success) setCategories(d.data); })
-      .catch(() => {});
-  }, []);
+      .catch(() => showToast("カテゴリの取得に失敗しました", "error"));
+  }, [showToast]);
 
   // 合計金額取得
   const fetchTotals = useCallback(() => {
+    setIsTotalsLoading(true);
     const now          = new Date();
     const today        = now.toISOString().split("T")[0];
     const firstOfMonth = `${today.slice(0, 7)}-01`;
@@ -119,6 +127,7 @@ export default function Dashboard() {
       getSum(new URLSearchParams({ startDate: firstOfYear,  limit: "1" })),
     ]).then(([todayTotal, monthTotal, yearTotal]) => {
       setTotals({ today: todayTotal, month: monthTotal, year: yearTotal });
+      setIsTotalsLoading(false);
     });
   }, []);
 
@@ -157,12 +166,20 @@ export default function Dashboard() {
           setPagination(d.data.pagination);
         }
       })
-      .catch(() => {})
+      .catch(() => showToast("データの取得に失敗しました", "error"))
       .finally(() => setIsLoading(false));
   }, [filterStatus, filterCategoryId, page, sortField, sortOrder]);
 
   useEffect(() => { fetchExpenses(); }, [fetchExpenses]);
   useEffect(() => { setPage(1); }, [filterStatus, filterCategoryId]);
+
+  // 削除ダイアログが開いたらキャンセルボタンにフォーカス
+  useEffect(() => {
+    if (deletingExpense) {
+      const timer = setTimeout(() => deleteCancelRef.current?.focus(), 50);
+      return () => clearTimeout(timer);
+    }
+  }, [deletingExpense]);
 
   // ---- 新規登録 ----
   const handleNewExpense = async (formData: ExpenseFormData) => {
@@ -197,6 +214,7 @@ export default function Dashboard() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "登録に失敗しました");
 
+    showToast("精算データを登録しました", "success");
     fetchExpenses();
     fetchTotals();
   };
@@ -221,6 +239,7 @@ export default function Dashboard() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "更新に失敗しました");
 
+    showToast("精算データを更新しました", "success");
     setEditingExpense(null);
     fetchExpenses();
     fetchTotals();
@@ -241,6 +260,7 @@ export default function Dashboard() {
       return;
     }
 
+    showToast("精算データを削除しました", "success");
     setDeletingExpense(null);
     setIsDeleting(false);
     fetchExpenses();
@@ -292,6 +312,14 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* スキップナビゲーション */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:bg-white focus:px-4 focus:py-2 focus:rounded-md focus:text-green-600 focus:font-semibold focus:shadow-md"
+      >
+        コンテンツへスキップ
+      </a>
+
       {/* ヘッダー */}
       <header className="bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -305,7 +333,7 @@ export default function Dashboard() {
                 onClick={() => setIsNewModalOpen(true)}
                 className="bg-white text-green-600 px-4 py-2 rounded-lg font-semibold hover:bg-green-50 transition-colors duration-200 flex items-center gap-2"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
                 新規登録
@@ -327,7 +355,7 @@ export default function Dashboard() {
       </header>
 
       {/* メインコンテンツ */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main id="main-content" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* フィルター */}
         <div className="mb-6 flex flex-col sm:flex-row gap-4">
           <div className="flex-1">
@@ -362,7 +390,7 @@ export default function Dashboard() {
         {/* テーブル */}
         <div className="bg-white shadow-sm rounded-lg overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
+            <table className="min-w-full divide-y divide-gray-200" aria-label="精算一覧">
               <thead className="bg-gray-50">
                 <tr>
                   {(
@@ -378,7 +406,17 @@ export default function Dashboard() {
                     <th
                       key={field}
                       onClick={() => handleSort(field)}
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      onKeyDown={(e) => e.key === "Enter" && handleSort(field)}
+                      tabIndex={0}
+                      scope="col"
+                      aria-sort={
+                        sortField === field
+                          ? sortOrder === "asc"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                      }
+                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-green-500"
                     >
                       <div className="flex items-center gap-1">
                         {label} <SortIcon field={field} />
@@ -390,16 +428,21 @@ export default function Dashboard() {
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="bg-white divide-y divide-gray-200" aria-live="polite" aria-busy={isLoading}>
                 {isLoading ? (
-                  <tr>
-                    <td colSpan={7} className="px-6 py-8 text-center text-sm text-gray-500">
-                      読み込み中...
-                    </td>
-                  </tr>
+                  // スケルトンUI: データ読み込み中
+                  Array.from({ length: 5 }).map((_, i) => (
+                    <tr key={i} aria-hidden="true">
+                      {Array.from({ length: 7 }).map((__, j) => (
+                        <td key={j} className="px-6 py-4">
+                          <div className="h-4 bg-gray-200 rounded animate-pulse" style={{ width: j === 2 ? "80%" : j === 6 ? "60%" : "70%" }} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))
                 ) : expenses.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-8 text-center text-sm text-gray-500">
+                    <td colSpan={7} className="px-6 py-8 text-center text-sm text-gray-500" role="cell">
                       データがありません
                     </td>
                   </tr>
@@ -430,7 +473,8 @@ export default function Dashboard() {
                           {expense.status !== "approved" && (
                             <button
                               onClick={() => setEditingExpense(expense)}
-                              className="text-xs px-3 py-1 rounded border border-blue-300 text-blue-600 hover:bg-blue-50 transition-colors"
+                              aria-label={`${expense.description} を編集`}
+                              className="text-xs px-3 py-1 rounded border border-blue-300 text-blue-600 hover:bg-blue-50 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-400"
                             >
                               編集
                             </button>
@@ -442,7 +486,8 @@ export default function Dashboard() {
                                 setDeleteError("");
                                 setDeletingExpense(expense);
                               }}
-                              className="text-xs px-3 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 transition-colors"
+                              aria-label={`${expense.description} を削除`}
+                              className="text-xs px-3 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 transition-colors focus:outline-none focus:ring-2 focus:ring-red-400"
                             >
                               削除
                             </button>
@@ -458,8 +503,8 @@ export default function Dashboard() {
 
           {/* ページネーション */}
           {pagination.totalPages > 1 && (
-            <div className="px-6 py-4 flex items-center justify-between border-t border-gray-200">
-              <p className="text-sm text-gray-700">
+            <nav aria-label="ページネーション" className="px-6 py-4 flex items-center justify-between border-t border-gray-200">
+              <p className="text-sm text-gray-700" aria-live="polite" aria-atomic="true">
                 全 {pagination.total} 件中{" "}
                 {(pagination.page - 1) * pagination.limit + 1}–
                 {Math.min(pagination.page * pagination.limit, pagination.total)} 件表示
@@ -468,60 +513,83 @@ export default function Dashboard() {
                 <button
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
                   disabled={page === 1}
-                  className="px-3 py-1 text-sm border border-gray-300 rounded-md disabled:opacity-40 hover:bg-gray-50"
+                  aria-label="前のページへ"
+                  className="px-3 py-1 text-sm border border-gray-300 rounded-md disabled:opacity-40 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-green-500"
                 >
                   前へ
                 </button>
-                <span className="px-3 py-1 text-sm text-gray-700">
+                <span className="px-3 py-1 text-sm text-gray-700" aria-current="page" aria-label={`${page}ページ目、全${pagination.totalPages}ページ`}>
                   {page} / {pagination.totalPages}
                 </span>
                 <button
                   onClick={() => setPage((p) => Math.min(pagination.totalPages, p + 1))}
                   disabled={page === pagination.totalPages}
-                  className="px-3 py-1 text-sm border border-gray-300 rounded-md disabled:opacity-40 hover:bg-gray-50"
+                  aria-label="次のページへ"
+                  className="px-3 py-1 text-sm border border-gray-300 rounded-md disabled:opacity-40 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-green-500"
                 >
                   次へ
                 </button>
               </div>
-            </div>
+            </nav>
           )}
         </div>
 
         {/* 合計金額 */}
-        <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white p-6 rounded-lg shadow-sm border-l-4 border-green-500">
-            <div className="flex items-center">
-              <svg className="w-8 h-8 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <div className="ml-4">
-                <p className="text-sm font-medium text-gray-600">本日の合計</p>
-                <p className="text-2xl font-bold text-gray-900">¥{totals.today.toLocaleString()}</p>
+        <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6" aria-busy={isTotalsLoading} aria-label="合計金額サマリー">
+          {isTotalsLoading ? (
+            // スケルトンUI: 合計金額読み込み中
+            [
+              { border: "border-green-500" },
+              { border: "border-blue-500" },
+              { border: "border-purple-500" },
+            ].map((card, i) => (
+              <div key={i} className={`bg-white p-6 rounded-lg shadow-sm border-l-4 ${card.border}`} aria-hidden="true">
+                <div className="flex items-center gap-4">
+                  <div className="w-8 h-8 bg-gray-200 rounded-full animate-pulse flex-shrink-0" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-3 bg-gray-200 rounded animate-pulse w-20" />
+                    <div className="h-7 bg-gray-200 rounded animate-pulse w-28" />
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-lg shadow-sm border-l-4 border-blue-500">
-            <div className="flex items-center">
-              <svg className="w-8 h-8 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-              <div className="ml-4">
-                <p className="text-sm font-medium text-gray-600">今月の合計</p>
-                <p className="text-2xl font-bold text-gray-900">¥{totals.month.toLocaleString()}</p>
+            ))
+          ) : (
+            <>
+              <div className="bg-white p-6 rounded-lg shadow-sm border-l-4 border-green-500">
+                <div className="flex items-center">
+                  <svg className="w-8 h-8 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <div className="ml-4">
+                    <p className="text-sm font-medium text-gray-600">本日の合計</p>
+                    <p className="text-2xl font-bold text-gray-900">¥{totals.today.toLocaleString()}</p>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-          <div className="bg-white p-6 rounded-lg shadow-sm border-l-4 border-purple-500">
-            <div className="flex items-center">
-              <svg className="w-8 h-8 text-purple-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-              </svg>
-              <div className="ml-4">
-                <p className="text-sm font-medium text-gray-600">今年の合計</p>
-                <p className="text-2xl font-bold text-gray-900">¥{totals.year.toLocaleString()}</p>
+              <div className="bg-white p-6 rounded-lg shadow-sm border-l-4 border-blue-500">
+                <div className="flex items-center">
+                  <svg className="w-8 h-8 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <div className="ml-4">
+                    <p className="text-sm font-medium text-gray-600">今月の合計</p>
+                    <p className="text-2xl font-bold text-gray-900">¥{totals.month.toLocaleString()}</p>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+              <div className="bg-white p-6 rounded-lg shadow-sm border-l-4 border-purple-500">
+                <div className="flex items-center">
+                  <svg className="w-8 h-8 text-purple-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                  <div className="ml-4">
+                    <p className="text-sm font-medium text-gray-600">今年の合計</p>
+                    <p className="text-2xl font-bold text-gray-900">¥{totals.year.toLocaleString()}</p>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       </main>
 
@@ -542,24 +610,31 @@ export default function Dashboard() {
 
       {/* 削除確認ダイアログ */}
       {deletingExpense && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-dialog-title"
+          aria-describedby="delete-dialog-description"
+        >
           <div
             className="absolute inset-0 bg-gray-500 opacity-75"
             onClick={() => !isDeleting && setDeletingExpense(null)}
+            aria-hidden="true"
           />
           <div className="relative bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4 z-10">
             <div className="flex items-center gap-3 mb-4">
               <div className="flex-shrink-0 w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
-                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                     d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
                   />
                 </svg>
               </div>
-              <h3 className="text-lg font-semibold text-gray-900">削除の確認</h3>
+              <h3 id="delete-dialog-title" className="text-lg font-semibold text-gray-900">削除の確認</h3>
             </div>
 
-            <p className="text-sm text-gray-600 mb-4">
+            <p id="delete-dialog-description" className="text-sm text-gray-600 mb-4">
               以下の精算データを削除しますか？この操作は取り消せません。
             </p>
 
@@ -586,16 +661,18 @@ export default function Dashboard() {
 
             <div className="flex justify-end gap-3">
               <button
+                ref={deleteCancelRef}
                 onClick={() => setDeletingExpense(null)}
                 disabled={isDeleting}
-                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 キャンセル
               </button>
               <button
                 onClick={handleDeleteConfirm}
                 disabled={isDeleting}
-                className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-busy={isDeleting}
+                className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isDeleting ? "削除中..." : "削除する"}
               </button>

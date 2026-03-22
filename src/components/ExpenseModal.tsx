@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { validateExpenseForm, type FormErrors } from "@/lib/validateExpense";
 
 interface Category {
@@ -61,9 +61,9 @@ const BLANK_FORM: ExpenseFormData = {
   description:    "",
 };
 
-function FieldError({ message }: { message?: string }) {
+function FieldError({ message, id }: { message?: string; id?: string }) {
   if (!message) return null;
-  return <p className="mt-1 text-sm text-red-600">{message}</p>;
+  return <p id={id} className="mt-1 text-sm text-red-600" role="alert">{message}</p>;
 }
 
 function inputCls(hasError?: string) {
@@ -80,6 +80,9 @@ export default function ExpenseModal({
 }: ExpenseModalProps) {
   const isEditMode = !!initialData;
 
+  // モーダルが開いたとき最初のフィールド（日付）にフォーカス
+  const dateInputRef = useRef<HTMLInputElement>(null);
+
   const [categories,   setCategories]   = useState<Category[]>([]);
   const [formData,     setFormData]     = useState<ExpenseFormData>(BLANK_FORM);
   const [formErrors,   setFormErrors]   = useState<FormErrors>({});
@@ -87,6 +90,14 @@ export default function ExpenseModal({
   const [fileError,    setFileError]    = useState<string>("");
   const [submitError,  setSubmitError]  = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // モーダルが開いたら最初のフィールドにフォーカス
+  useEffect(() => {
+    if (isOpen) {
+      const timer = setTimeout(() => dateInputRef.current?.focus(), 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen]);
 
   // モーダルが開くたびにフォームを初期化
   useEffect(() => {
@@ -198,10 +209,26 @@ export default function ExpenseModal({
     if (!isSubmitting) onClose();
   };
 
+  // Escape キーでモーダルを閉じる
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") handleClose();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, isSubmitting]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
+    <div
+      className="fixed inset-0 z-50 overflow-y-auto"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="modal-title"
+    >
       <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
         <div className="fixed inset-0 transition-opacity" aria-hidden="true">
           <div className="absolute inset-0 bg-gray-500 opacity-75" onClick={handleClose} />
@@ -211,7 +238,7 @@ export default function ExpenseModal({
           <form onSubmit={handleSubmit} noValidate>
             {/* ヘッダー */}
             <div className="bg-gradient-to-r from-green-500 to-green-600 px-6 py-4">
-              <h3 className="text-lg font-medium text-white">
+              <h3 id="modal-title" className="text-lg font-medium text-white">
                 {isEditMode ? "交通費精算編集" : "交通費精算登録"}
               </h3>
             </div>
@@ -227,35 +254,42 @@ export default function ExpenseModal({
               {/* 月日 */}
               <div>
                 <label htmlFor="date" className="block text-sm font-medium text-gray-700 mb-2">
-                  月日 <span className="text-red-500">*</span>
+                  月日 <span className="text-red-500" aria-hidden="true">*</span>
                 </label>
                 <input
+                  ref={dateInputRef}
                   type="date"
                   id="date"
                   value={formData.date}
                   onChange={(e) => handleInputChange("date", e.target.value)}
                   className={inputCls(formErrors.date)}
+                  aria-required="true"
+                  aria-invalid={!!formErrors.date}
+                  aria-describedby={formErrors.date ? "date-error" : undefined}
                 />
-                <FieldError message={formErrors.date} />
+                <FieldError message={formErrors.date} id="date-error" />
               </div>
 
               {/* 精算項目 */}
               <div>
                 <label htmlFor="category" className="block text-sm font-medium text-gray-700 mb-2">
-                  精算項目 <span className="text-red-500">*</span>
+                  精算項目 <span className="text-red-500" aria-hidden="true">*</span>
                 </label>
                 <select
                   id="category"
                   value={formData.categoryId}
                   onChange={(e) => handleCategoryChange(e.target.value)}
                   className={inputCls(formErrors.categoryId)}
+                  aria-required="true"
+                  aria-invalid={!!formErrors.categoryId}
+                  aria-describedby={formErrors.categoryId ? "category-error" : undefined}
                 >
                   {categories.length === 0 && <option value="">読み込み中...</option>}
                   {categories.map((cat) => (
                     <option key={cat.id} value={cat.id}>{cat.name}</option>
                   ))}
                 </select>
-                <FieldError message={formErrors.categoryId} />
+                <FieldError message={formErrors.categoryId} id="category-error" />
               </div>
 
               {/* 交通手段 */}
@@ -325,7 +359,7 @@ export default function ExpenseModal({
               {/* 金額 */}
               <div>
                 <label htmlFor="amount" className="block text-sm font-medium text-gray-700 mb-2">
-                  金額（円） <span className="text-red-500">*</span>
+                  金額（円） <span className="text-red-500" aria-hidden="true">*</span>
                 </label>
                 <input
                   type="number"
@@ -335,14 +369,17 @@ export default function ExpenseModal({
                   className={inputCls(formErrors.amount)}
                   placeholder="例: 1200"
                   min="1"
+                  aria-required="true"
+                  aria-invalid={!!formErrors.amount}
+                  aria-describedby={formErrors.amount ? "amount-error" : undefined}
                 />
-                <FieldError message={formErrors.amount} />
+                <FieldError message={formErrors.amount} id="amount-error" />
               </div>
 
               {/* 内容 */}
               <div>
                 <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-2">
-                  内容 <span className="text-red-500">*</span>
+                  内容 <span className="text-red-500" aria-hidden="true">*</span>
                 </label>
                 <textarea
                   id="description"
@@ -352,9 +389,12 @@ export default function ExpenseModal({
                   className={inputCls(formErrors.description)}
                   placeholder="精算内容を入力してください"
                   maxLength={1000}
+                  aria-required="true"
+                  aria-invalid={!!formErrors.description}
+                  aria-describedby={formErrors.description ? "description-error" : undefined}
                 />
                 <div className="flex justify-between items-start mt-1">
-                  <FieldError message={formErrors.description} />
+                  <FieldError message={formErrors.description} id="description-error" />
                   <span className="text-xs text-gray-400 ml-auto">
                     {formData.description.length}/1000
                   </span>

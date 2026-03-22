@@ -11,26 +11,20 @@ setup("認証セットアップ: テストユーザーでログイン", async ({
     fs.mkdirSync(authDir, { recursive: true });
   }
 
-  // CSRFトークンを取得
-  const csrfRes = await page.request.get("/api/auth/csrf");
-  const { csrfToken } = await csrfRes.json();
+  // テスト専用APIでセッションCookieを生成
+  const res = await page.request.post("/api/test-session");
+  if (!res.ok()) {
+    throw new Error(`テストセッション生成失敗: ${res.status()} ${await res.text()}`);
+  }
 
-  // E2Eテスト用 CredentialsProvider でサインイン
-  await page.request.post("/api/auth/callback/e2e-credentials", {
-    form: {
-      csrfToken,
-      email: "e2e-test@example.com",
-      name: "E2Eテストユーザー",
-      callbackUrl: "http://localhost:3000/dashboard",
-      json: "true",
-    },
-  });
+  // CSRF Cookieも初期化しておく（ログアウト時に必要）
+  await page.request.get("/api/auth/csrf");
 
   // ダッシュボードにアクセスしてログイン状態を確認
   await page.goto("/dashboard");
   await expect(page).toHaveURL("/dashboard");
   await expect(page.locator("h1")).toContainText("Bridge System");
 
-  // 認証状態を保存
+  // 認証状態（セッション + CSRF Cookie）を保存
   await page.context().storageState({ path: authFile });
 });

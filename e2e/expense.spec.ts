@@ -89,13 +89,13 @@ test.describe("精算システム E2Eテスト（認証済み）", () => {
     // モーダルが閉じる
     await expect(page.getByText("交通費精算登録")).not.toBeVisible();
 
-    // 登録したデータが一覧に表示されている
+    // 登録したデータが一覧に表示されている（description列のみ完全一致）
     await expect(
-      page.getByRole("cell", { name: TEST_EXPENSE.description })
+      page.locator("td").filter({ hasText: TEST_EXPENSE.description }).first()
     ).toBeVisible();
 
     // 金額が表示されている（カンマ区切り）
-    await expect(page.getByRole("cell", { name: "¥12,340" })).toBeVisible();
+    await expect(page.locator("td").filter({ hasText: "¥12,340" }).first()).toBeVisible();
   });
 
   test("4. ログアウトするとログイン画面にリダイレクトされる", async ({
