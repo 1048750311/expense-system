@@ -3,6 +3,8 @@ import { redirect } from "next/navigation";
 import LoginForm from "@/components/LoginForm";
 import { authOptions } from "@/lib/auth";
 
+export const dynamic = 'force-dynamic';
+
 export const metadata = {
   title: "Bridge System - ログイン",
   description: "Bridge Systemへのログイン",
