@@ -2,16 +2,20 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { signOut } from "next-auth/react";
-import ExpenseModal, { ExpenseFormData } from "./ExpenseModal";
+import ExpenseModal, { ExpenseFormData, InitialExpenseData } from "./ExpenseModal";
 
 interface ExpenseItem {
   id: string;
   date: string;
+  categoryId: string;
   category: string;
   description: string;
   amount: number;
   status: "draft" | "submitted" | "approved" | "rejected";
   submitter: string;
+  transportation: string;
+  tripType: "one-way" | "round-trip";
+  receipt: "yes" | "no";
 }
 
 interface Category {
@@ -30,11 +34,14 @@ interface Pagination {
 interface ApiExpense {
   id: string;
   expenseDate: string;
-  category: { name: string };
+  category: { id: string; name: string };
   description: string;
   amount: number;
   status: string;
   user: { name: string };
+  transportType: string | null;
+  roundTrip: boolean;
+  receiptStatus: string;
 }
 
 const STATUS_CONFIG = {
@@ -44,44 +51,59 @@ const STATUS_CONFIG = {
   rejected:  { label: "却下",    className: "bg-red-100 text-red-800" },
 };
 
-// API sortBy field → API param mapping
 const SORT_FIELD_MAP: Record<string, string> = {
   date:        "expenseDate",
-  category:    "expenseDate", // no category sort in API; fall back
-  description: "expenseDate",
+  category:    "expenseDate",
   amount:      "amount",
   status:      "status",
   submitter:   "expenseDate",
+  description: "expenseDate",
 };
 
+function toTripType(roundTrip: boolean): "one-way" | "round-trip" {
+  return roundTrip ? "round-trip" : "one-way";
+}
+
+function toReceipt(receiptStatus: string): "yes" | "no" {
+  return receiptStatus !== "none" ? "yes" : "no";
+}
+
 export default function Dashboard() {
-  const [expenses, setExpenses]     = useState<ExpenseItem[]>([]);
-  const [isLoading, setIsLoading]   = useState(true);
-  const [categories, setCategories] = useState<Category[]>([]);
+  const [expenses,     setExpenses]     = useState<ExpenseItem[]>([]);
+  const [isLoading,    setIsLoading]    = useState(true);
+  const [categories,   setCategories]   = useState<Category[]>([]);
 
   const [filterStatus,     setFilterStatus]     = useState<string>("all");
   const [filterCategoryId, setFilterCategoryId] = useState<string>("all");
   const [page,             setPage]             = useState(1);
   const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 10, total: 0, totalPages: 1 });
 
-  const [sortField,  setSortField]  = useState<keyof ExpenseItem>("date");
-  const [sortOrder,  setSortOrder]  = useState<"asc" | "desc">("desc");
+  const [sortField, setSortField] = useState<keyof ExpenseItem>("date");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
   const [totals, setTotals] = useState({ today: 0, month: 0, year: 0 });
-  const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Fetch categories for filter dropdown
+  // モーダル状態
+  const [isNewModalOpen,  setIsNewModalOpen]  = useState(false);
+  const [editingExpense,  setEditingExpense]  = useState<ExpenseItem | null>(null);
+
+  // 削除確認ダイアログ状態
+  const [deletingExpense, setDeletingExpense] = useState<ExpenseItem | null>(null);
+  const [isDeleting,      setIsDeleting]      = useState(false);
+  const [deleteError,     setDeleteError]     = useState<string>("");
+
+  // カテゴリ取得
   useEffect(() => {
     fetch("/api/expenses/categories")
-      .then((res) => res.json())
-      .then((data) => { if (data.success) setCategories(data.data); })
+      .then((r) => r.json())
+      .then((d) => { if (d.success) setCategories(d.data); })
       .catch(() => {});
   }, []);
 
-  // Fetch aggregate totals (today / this month / this year)
+  // 合計金額取得
   const fetchTotals = useCallback(() => {
-    const now   = new Date();
-    const today = now.toISOString().split("T")[0];
+    const now          = new Date();
+    const today        = now.toISOString().split("T")[0];
     const firstOfMonth = `${today.slice(0, 7)}-01`;
     const firstOfYear  = `${now.getFullYear()}-01-01`;
 
@@ -92,7 +114,7 @@ export default function Dashboard() {
         .catch(() => 0);
 
     Promise.all([
-      getSum(new URLSearchParams({ startDate: today, endDate: today, limit: "1" })),
+      getSum(new URLSearchParams({ startDate: today,        endDate: today, limit: "1" })),
       getSum(new URLSearchParams({ startDate: firstOfMonth, limit: "1" })),
       getSum(new URLSearchParams({ startDate: firstOfYear,  limit: "1" })),
     ]).then(([todayTotal, monthTotal, yearTotal]) => {
@@ -102,33 +124,37 @@ export default function Dashboard() {
 
   useEffect(() => { fetchTotals(); }, [fetchTotals]);
 
-  // Fetch expense list
+  // 一覧取得
   const fetchExpenses = useCallback(() => {
     setIsLoading(true);
     const params = new URLSearchParams({
       page:      page.toString(),
       limit:     "10",
-      sortBy:    SORT_FIELD_MAP[sortField] ?? "expenseDate",
+      sortBy:    SORT_FIELD_MAP[sortField as string] ?? "expenseDate",
       sortOrder: sortOrder,
     });
     if (filterStatus     !== "all") params.set("status",     filterStatus);
     if (filterCategoryId !== "all") params.set("categoryId", filterCategoryId);
 
     fetch(`/api/expenses?${params}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
-          const items: ExpenseItem[] = data.data.expenses.map((e: ApiExpense) => ({
-            id:          e.id,
-            date:        e.expenseDate.split("T")[0],
-            category:    e.category.name,
-            description: e.description,
-            amount:      e.amount,
-            status:      e.status as ExpenseItem["status"],
-            submitter:   e.user.name,
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) {
+          const items: ExpenseItem[] = d.data.expenses.map((e: ApiExpense) => ({
+            id:             e.id,
+            date:           e.expenseDate.split("T")[0],
+            categoryId:     e.category.id,
+            category:       e.category.name,
+            description:    e.description,
+            amount:         e.amount,
+            status:         e.status as ExpenseItem["status"],
+            submitter:      e.user.name,
+            transportation: e.transportType ?? "other",
+            tripType:       toTripType(e.roundTrip),
+            receipt:        toReceipt(e.receiptStatus),
           }));
           setExpenses(items);
-          setPagination(data.data.pagination);
+          setPagination(d.data.pagination);
         }
       })
       .catch(() => {})
@@ -136,11 +162,9 @@ export default function Dashboard() {
   }, [filterStatus, filterCategoryId, page, sortField, sortOrder]);
 
   useEffect(() => { fetchExpenses(); }, [fetchExpenses]);
-
-  // Reset to page 1 when filters change
   useEffect(() => { setPage(1); }, [filterStatus, filterCategoryId]);
 
-  // New expense handler
+  // ---- 新規登録 ----
   const handleNewExpense = async (formData: ExpenseFormData) => {
     let receiptPath: string | undefined;
     let receiptStatus: "none" | "available" | "uploaded" =
@@ -173,12 +197,57 @@ export default function Dashboard() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "登録に失敗しました");
 
-    // Refresh list and totals
     fetchExpenses();
     fetchTotals();
   };
 
-  // Sort handler
+  // ---- 編集 ----
+  const handleEditSubmit = async (formData: ExpenseFormData) => {
+    if (!editingExpense) return;
+
+    const res  = await fetch(`/api/expenses/${editingExpense.id}`, {
+      method:  "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        categoryId:    formData.categoryId,
+        description:   formData.description,
+        amount:        formData.amount,
+        expenseDate:   formData.date,
+        transportType: formData.transportation,
+        roundTrip:     formData.tripType === "round-trip",
+        receiptStatus: formData.receipt === "yes" ? "available" : "none",
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "更新に失敗しました");
+
+    setEditingExpense(null);
+    fetchExpenses();
+    fetchTotals();
+  };
+
+  // ---- 削除 ----
+  const handleDeleteConfirm = async () => {
+    if (!deletingExpense) return;
+    setIsDeleting(true);
+    setDeleteError("");
+
+    const res  = await fetch(`/api/expenses/${deletingExpense.id}`, { method: "DELETE" });
+    const data = await res.json();
+
+    if (!res.ok) {
+      setDeleteError(data.error || "削除に失敗しました");
+      setIsDeleting(false);
+      return;
+    }
+
+    setDeletingExpense(null);
+    setIsDeleting(false);
+    fetchExpenses();
+    fetchTotals();
+  };
+
+  // ---- ソート ----
   const handleSort = (field: keyof ExpenseItem) => {
     if (sortField === field) {
       setSortOrder(sortOrder === "asc" ? "desc" : "asc");
@@ -189,10 +258,10 @@ export default function Dashboard() {
   };
 
   const getStatusBadge = (status: string) => {
-    const config = STATUS_CONFIG[status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.draft;
+    const cfg = STATUS_CONFIG[status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.draft;
     return (
-      <span className={`px-2 py-1 text-xs font-medium rounded-full ${config.className}`}>
-        {config.label}
+      <span className={`px-2 py-1 text-xs font-medium rounded-full ${cfg.className}`}>
+        {cfg.label}
       </span>
     );
   };
@@ -200,12 +269,26 @@ export default function Dashboard() {
   const SortIcon = ({ field }: { field: keyof ExpenseItem }) =>
     sortField === field ? (
       <svg
-        className={`w-4 h-4 ${sortOrder === "asc" ? "rotate-180" : ""}`}
+        className={`w-4 h-4 inline-block ${sortOrder === "asc" ? "rotate-180" : ""}`}
         fill="none" stroke="currentColor" viewBox="0 0 24 24"
       >
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
       </svg>
     ) : null;
+
+  // 編集モーダルに渡す initialData
+  const editInitialData: InitialExpenseData | undefined = editingExpense
+    ? {
+        date:           editingExpense.date,
+        categoryId:     editingExpense.categoryId,
+        category:       editingExpense.category,
+        transportation: editingExpense.transportation,
+        tripType:       editingExpense.tripType,
+        receipt:        editingExpense.receipt,
+        amount:         editingExpense.amount,
+        description:    editingExpense.description,
+      }
+    : undefined;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -217,10 +300,9 @@ export default function Dashboard() {
               <h1 className="text-2xl font-bold">Bridge System</h1>
               <p className="text-green-100 text-sm">精算一覧</p>
             </div>
-
             <div className="flex items-center space-x-4">
               <button
-                onClick={() => setIsModalOpen(true)}
+                onClick={() => setIsNewModalOpen(true)}
                 className="bg-white text-green-600 px-4 py-2 rounded-lg font-semibold hover:bg-green-50 transition-colors duration-200 flex items-center gap-2"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -234,13 +316,10 @@ export default function Dashboard() {
               >
                 ログアウト
               </button>
-
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-                  </svg>
-                </div>
+              <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
+                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                </svg>
               </div>
             </div>
           </div>
@@ -265,7 +344,6 @@ export default function Dashboard() {
               <option value="rejected">却下</option>
             </select>
           </div>
-
           <div className="flex-1">
             <label className="block text-sm font-medium text-gray-700 mb-2">カテゴリ</label>
             <select
@@ -303,23 +381,25 @@ export default function Dashboard() {
                       className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                     >
                       <div className="flex items-center gap-1">
-                        {label}
-                        <SortIcon field={field} />
+                        {label} <SortIcon field={field} />
                       </div>
                     </th>
                   ))}
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    操作
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-8 text-center text-sm text-gray-500">
+                    <td colSpan={7} className="px-6 py-8 text-center text-sm text-gray-500">
                       読み込み中...
                     </td>
                   </tr>
                 ) : expenses.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-8 text-center text-sm text-gray-500">
+                    <td colSpan={7} className="px-6 py-8 text-center text-sm text-gray-500">
                       データがありません
                     </td>
                   </tr>
@@ -344,6 +424,31 @@ export default function Dashboard() {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                         {expense.submitter}
                       </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right">
+                        <div className="flex justify-end gap-2">
+                          {/* 編集ボタン：承認済みは非表示 */}
+                          {expense.status !== "approved" && (
+                            <button
+                              onClick={() => setEditingExpense(expense)}
+                              className="text-xs px-3 py-1 rounded border border-blue-300 text-blue-600 hover:bg-blue-50 transition-colors"
+                            >
+                              編集
+                            </button>
+                          )}
+                          {/* 削除ボタン：承認済みは非表示 */}
+                          {expense.status !== "approved" && (
+                            <button
+                              onClick={() => {
+                                setDeleteError("");
+                                setDeletingExpense(expense);
+                              }}
+                              className="text-xs px-3 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50 transition-colors"
+                            >
+                              削除
+                            </button>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   ))
                 )}
@@ -355,7 +460,8 @@ export default function Dashboard() {
           {pagination.totalPages > 1 && (
             <div className="px-6 py-4 flex items-center justify-between border-t border-gray-200">
               <p className="text-sm text-gray-700">
-                全 {pagination.total} 件中 {(pagination.page - 1) * pagination.limit + 1}–
+                全 {pagination.total} 件中{" "}
+                {(pagination.page - 1) * pagination.limit + 1}–
                 {Math.min(pagination.page * pagination.limit, pagination.total)} 件表示
               </p>
               <div className="flex gap-2">
@@ -394,7 +500,6 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
-
           <div className="bg-white p-6 rounded-lg shadow-sm border-l-4 border-blue-500">
             <div className="flex items-center">
               <svg className="w-8 h-8 text-blue-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -406,7 +511,6 @@ export default function Dashboard() {
               </div>
             </div>
           </div>
-
           <div className="bg-white p-6 rounded-lg shadow-sm border-l-4 border-purple-500">
             <div className="flex items-center">
               <svg className="w-8 h-8 text-purple-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -421,12 +525,84 @@ export default function Dashboard() {
         </div>
       </main>
 
-      {/* 交通費精算モーダル */}
+      {/* 新規登録モーダル */}
       <ExpenseModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+        isOpen={isNewModalOpen}
+        onClose={() => setIsNewModalOpen(false)}
         onSubmit={handleNewExpense}
       />
+
+      {/* 編集モーダル */}
+      <ExpenseModal
+        isOpen={!!editingExpense}
+        onClose={() => setEditingExpense(null)}
+        onSubmit={handleEditSubmit}
+        initialData={editInitialData}
+      />
+
+      {/* 削除確認ダイアログ */}
+      {deletingExpense && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-gray-500 opacity-75"
+            onClick={() => !isDeleting && setDeletingExpense(null)}
+          />
+          <div className="relative bg-white rounded-lg shadow-xl p-6 max-w-md w-full mx-4 z-10">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex-shrink-0 w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+                <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                  />
+                </svg>
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">削除の確認</h3>
+            </div>
+
+            <p className="text-sm text-gray-600 mb-4">
+              以下の精算データを削除しますか？この操作は取り消せません。
+            </p>
+
+            <div className="bg-gray-50 rounded-md p-3 mb-4 text-sm space-y-1">
+              <p>
+                <span className="font-medium text-gray-700">日付: </span>
+                {new Date(deletingExpense.date).toLocaleDateString("ja-JP")}
+              </p>
+              <p>
+                <span className="font-medium text-gray-700">内容: </span>
+                {deletingExpense.description}
+              </p>
+              <p>
+                <span className="font-medium text-gray-700">金額: </span>
+                ¥{deletingExpense.amount.toLocaleString()}
+              </p>
+            </div>
+
+            {deleteError && (
+              <div className="mb-4 bg-red-50 border border-red-300 text-red-700 px-3 py-2 rounded text-sm">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setDeletingExpense(null)}
+                disabled={isDeleting}
+                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleDeleteConfirm}
+                disabled={isDeleting}
+                className="px-4 py-2 border border-transparent rounded-md text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isDeleting ? "削除中..." : "削除する"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
