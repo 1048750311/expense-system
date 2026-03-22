@@ -1,0 +1,90 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String    // NOT NULL - ユーザー名は必須
+  displayName   String?
+  department    String?
+  role          String    @default("user")  // user | manager | admin
+  status        String    @default("active") // active | inactive
+  image         String?
+  azureId       String?   @unique
+
+  // Relations
+  expenses      Expense[]   @relation("ExpenseSubmitter")
+  approvals     Expense[]   @relation("ExpenseApprover")
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status])
+  @@index([department])
+  @@map("users")
+}
+
+model ExpenseCategory {
+  id            String    @id @default(cuid())
+  name          String    @unique
+  code          String    @unique
+  description   String?
+  isActive      Boolean   @default(true)
+
+  // Relations
+  expenses      Expense[]
+
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([isActive])
+  @@map("expense_categories")
+}
+
+model Expense {
+  id                String        @id @default(cuid())
+  userId            String
+  user              User          @relation("ExpenseSubmitter", fields: [userId], references: [id], onDelete: Cascade)
+  
+  categoryId        String
+  category          ExpenseCategory @relation(fields: [categoryId], references: [id])
+  
+  description       String        // NOT NULL - 摘要・説明は必須
+  amount            Float         // NOT NULL - 金額は必須
+  expenseDate       DateTime      // NOT NULL - 経費発生日は必須
+  
+  receiptStatus     String    @default("none") // none | available | uploaded
+  receiptPath       String?
+  
+  transportType     String?          // train | bus | car | other
+  roundTrip         Boolean   @default(false)
+  
+  status            String    @default("draft") // draft | submitted | approved | rejected
+  
+  approverUserId    String?
+  approver          User?         @relation("ExpenseApprover", fields: [approverUserId], references: [id], onDelete: SetNull)
+  approvalDate      DateTime?
+  approvalComments  String?
+  rejectReason      String?
+  
+  createdAt         DateTime  @default(now())
+  submittedAt       DateTime?
+  updatedAt         DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([categoryId])
+  @@index([status])
+  @@index([expenseDate])
+  @@index([approverUserId])
+  @@index([userId, status, createdAt])
+  @@map("expenses")
+}
