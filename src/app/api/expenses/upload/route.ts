@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth/next';
 import { authOptions } from '@/lib/auth';
-import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
+import { put } from '@vercel/blob';
 import { randomUUID } from 'crypto';
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
@@ -61,31 +60,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 保存先ディレクトリ: public/uploads/YYYY/MM/
+    // ファイル名: UUID.拡張子（パストラバーサル対策）
     const now = new Date();
     const year = now.getFullYear().toString();
     const month = (now.getMonth() + 1).toString().padStart(2, '0');
-    const uploadDir = join(process.cwd(), 'public', 'uploads', year, month);
+    const filename = `uploads/${year}/${month}/${randomUUID()}.${extension}`;
 
-    await mkdir(uploadDir, { recursive: true });
-
-    // ファイル名: UUID.拡張子（パストラバーサル対策）
-    const filename = `${randomUUID()}.${extension}`;
-    const filePath = join(uploadDir, filename);
-
-    // ファイル書き込み
-    const buffer = Buffer.from(await file.arrayBuffer());
-    await writeFile(filePath, buffer);
-
-    // クライアントから参照できるパス（/uploads/YYYY/MM/filename）
-    const publicPath = `/uploads/${year}/${month}/${filename}`;
+    // Vercel Blob にアップロード
+    const blob = await put(filename, file, {
+      access: 'public',
+      contentType: file.type,
+    });
 
     return NextResponse.json(
       {
         success: true,
         data: {
-          path: publicPath,
-          filename,
+          path: blob.url,
+          filename: blob.pathname,
           originalName: file.name,
           size: file.size,
           mimeType: file.type,
