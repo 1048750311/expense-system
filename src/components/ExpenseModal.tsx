@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { validateExpenseForm, type FormErrors } from "@/lib/validateExpense";
 
 interface Category {
   id: string;
@@ -37,13 +38,6 @@ export interface ExpenseFormData {
   amount: number;
   description: string;
   file?: File;
-}
-
-interface FormErrors {
-  date?: string;
-  categoryId?: string;
-  amount?: string;
-  description?: string;
 }
 
 const transportationOptions = [
@@ -177,41 +171,11 @@ export default function ExpenseModal({
     setFile(selected);
   };
 
-  const validateForm = (): FormErrors => {
-    const errors: FormErrors = {};
-
-    if (!formData.date) {
-      errors.date = "日付を入力してください";
-    } else {
-      const d = new Date(formData.date);
-      if (isNaN(d.getTime())) errors.date = "正しい日付を入力してください";
-    }
-
-    if (!formData.categoryId) {
-      errors.categoryId = "精算項目を選択してください";
-    }
-
-    if (!formData.amount || formData.amount <= 0) {
-      errors.amount = "1円以上の金額を入力してください";
-    } else if (formData.amount > 10_000_000) {
-      errors.amount = "金額は1,000万円以下で入力してください";
-    } else if (!Number.isInteger(formData.amount)) {
-      errors.amount = "金額は整数で入力してください";
-    }
-
-    if (!formData.description.trim()) {
-      errors.description = "内容を入力してください";
-    } else if (formData.description.trim().length > 1000) {
-      errors.description = "内容は1,000文字以内で入力してください";
-    }
-
-    return errors;
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const errors = validateForm();
+    const errors = validateExpenseForm(formData);
     if (Object.keys(errors).length > 0) {
       setFormErrors(errors);
       return;
