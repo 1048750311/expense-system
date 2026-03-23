@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { signOut } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 import ExpenseModal, { ExpenseFormData, InitialExpenseData } from "./ExpenseModal";
 import { useToast } from "./Toast";
 
@@ -73,6 +73,7 @@ function toReceipt(receiptStatus: string): "yes" | "no" {
 
 export default function Dashboard() {
   const { showToast } = useToast();
+  const { data: session } = useSession();
 
   const [expenses,     setExpenses]     = useState<ExpenseItem[]>([]);
   const [isLoading,    setIsLoading]    = useState(true);
@@ -349,10 +350,15 @@ export default function Dashboard() {
               >
                 ログアウト
               </button>
-              <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
-                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
-                </svg>
+              <div className="w-10 h-10 rounded-full overflow-hidden bg-white/20 flex items-center justify-center flex-shrink-0">
+                {session?.user?.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={session.user.image} alt={session.user.name ?? "ユーザー"} className="w-full h-full object-cover" />
+                ) : (
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                  </svg>
+                )}
               </div>
             </div>
           </div>

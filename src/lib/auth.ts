@@ -73,6 +73,24 @@ export const authOptions: NextAuthOptions = {
         });
 
         token.id = dbUser.id;
+
+        // Azure AD プロフィール画像を取得してトークンに保存
+        if (account?.access_token) {
+          try {
+            const photoRes = await fetch(
+              "https://graph.microsoft.com/v1.0/me/photo/$value",
+              { headers: { Authorization: `Bearer ${account.access_token}` } }
+            );
+            if (photoRes.ok) {
+              const buffer = await photoRes.arrayBuffer();
+              const base64 = Buffer.from(buffer).toString("base64");
+              const mime = photoRes.headers.get("content-type") ?? "image/jpeg";
+              token.image = `data:${mime};base64,${base64}`;
+            }
+          } catch {
+            // 画像取得失敗は無視
+          }
+        }
       }
       // E2Eテスト用 CredentialsProvider（profileはなくuserが渡る）
       if (user && account?.provider === "e2e-credentials") {
@@ -86,6 +104,7 @@ export const authOptions: NextAuthOptions = {
       if (token && session.user) {
         session.user.id = token.id as string;
         session.user.name = session.user.name || (token.name as string | undefined);
+        session.user.image = (token.image as string | undefined) ?? session.user.image;
       }
       return session;
     },
