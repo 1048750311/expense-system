@@ -1,10 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { signIn } from "next-auth/react";
 
 export default function LoginForm() {
   const [isLoading, setIsLoading] = useState(false);
+  const [toast, setToast] = useState(false);
+
+  const showToast = () => {
+    setToast(true);
+  };
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(false), 3000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   const handleMicrosoftLogin = async () => {
     setIsLoading(true);
@@ -19,6 +30,15 @@ export default function LoginForm() {
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row">
+      {/* トースト通知 */}
+      {toast && (
+        <div className="fixed top-4 right-4 z-50 flex items-center gap-3 bg-white border border-amber-300 shadow-lg rounded-lg px-4 py-3 text-sm text-amber-700 animate-fade-in">
+          <svg className="w-4 h-4 shrink-0 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20A10 10 0 0012 2z" />
+          </svg>
+          この機能は現在ご利用いただけません。開発中です。
+        </div>
+      )}
       {/* 左側：グリーングラデーション背景とロゴ */}
       <div className="w-full md:w-1/2 bg-gradient-to-br from-green-400 via-green-500 to-green-600 flex items-center justify-center p-6 md:p-12">
         <div className="text-center">
@@ -137,6 +157,8 @@ export default function LoginForm() {
               </div>
 
               <button
+                type="button"
+                onClick={showToast}
                 className="w-full py-3 bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-semibold rounded-lg transition-all duration-200 text-sm md:text-base"
               >
                 ログイン
@@ -148,14 +170,14 @@ export default function LoginForm() {
           <div className="mt-8 text-center text-xs md:text-sm text-gray-600 space-y-2">
             <p>
               アカウントをお持ちでないですか？{" "}
-              <a href="#" className="text-green-600 hover:text-green-700 font-semibold">
+              <button type="button" onClick={showToast} className="text-green-600 hover:text-green-700 font-semibold">
                 登録
-              </a>
+              </button>
             </p>
             <p>
-              <a href="#" className="text-green-600 hover:text-green-700 font-semibold">
+              <button type="button" onClick={showToast} className="text-green-600 hover:text-green-700 font-semibold">
                 パスワードをお忘れですか？
-              </a>
+              </button>
             </p>
           </div>
         </div>
