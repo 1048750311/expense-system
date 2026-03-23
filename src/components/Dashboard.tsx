@@ -81,6 +81,7 @@ export default function Dashboard() {
   const [filterStatus,     setFilterStatus]     = useState<string>("all");
   const [filterCategoryId, setFilterCategoryId] = useState<string>("all");
   const [page,             setPage]             = useState(1);
+  const [limit,            setLimit]            = useState(10);
   const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 10, total: 0, totalPages: 1 });
 
   const [sortField, setSortField] = useState<keyof ExpenseItem>("date");
@@ -140,7 +141,7 @@ export default function Dashboard() {
     setIsLoading(true);
     const params = new URLSearchParams({
       page:      page.toString(),
-      limit:     "10",
+      limit:     limit.toString(),
       sortBy:    SORT_FIELD_MAP[sortField as string] ?? "expenseDate",
       sortOrder: sortOrder,
     });
@@ -171,10 +172,10 @@ export default function Dashboard() {
       })
       .catch(() => showToast("データの取得に失敗しました", "error"))
       .finally(() => setIsLoading(false));
-  }, [filterStatus, filterCategoryId, page, sortField, sortOrder, showToast]);
+  }, [filterStatus, filterCategoryId, page, limit, sortField, sortOrder, showToast]);
 
   useEffect(() => { fetchExpenses(); }, [fetchExpenses]);
-  useEffect(() => { setPage(1); }, [filterStatus, filterCategoryId]);
+  useEffect(() => { setPage(1); }, [filterStatus, filterCategoryId, limit]);
 
   // 削除ダイアログが開いたらキャンセルボタンにフォーカス
   useEffect(() => {
@@ -328,10 +329,10 @@ export default function Dashboard() {
       <header className="bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center py-4">
-            <div>
+            <a href="https://expense-system-ten.vercel.app/" className="hover:opacity-80 transition-opacity">
               <h1 className="text-2xl font-bold">Bridge System</h1>
               <p className="text-green-100 text-sm">精算一覧</p>
-            </div>
+            </a>
             <div className="flex items-center space-x-4">
               <button
                 onClick={() => setIsNewModalOpen(true)}
@@ -506,13 +507,25 @@ export default function Dashboard() {
           </div>
 
           {/* ページネーション */}
-          {pagination.totalPages > 1 && (
-            <nav aria-label="ページネーション" className="px-6 py-4 flex items-center justify-between border-t border-gray-200">
+          <nav aria-label="ページネーション" className="px-6 py-4 flex items-center justify-between border-t border-gray-200 flex-wrap gap-3">
+            <div className="flex items-center gap-3">
               <p className="text-sm text-gray-700" aria-live="polite" aria-atomic="true">
                 全 {pagination.total} 件中{" "}
-                {(pagination.page - 1) * pagination.limit + 1}–
+                {pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.limit + 1}–
                 {Math.min(pagination.page * pagination.limit, pagination.total)} 件表示
               </p>
+              <select
+                value={limit}
+                onChange={(e) => setLimit(Number(e.target.value))}
+                aria-label="1ページの表示件数"
+                className="text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-green-500"
+              >
+                {[10, 30, 50].map((n) => (
+                  <option key={n} value={n}>{n}件</option>
+                ))}
+              </select>
+            </div>
+            {pagination.totalPages > 1 && (
               <div className="flex gap-2">
                 <button
                   onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -534,8 +547,8 @@ export default function Dashboard() {
                   次へ
                 </button>
               </div>
-            </nav>
-          )}
+            )}
+          </nav>
         </div>
 
         {/* 合計金額 */}
