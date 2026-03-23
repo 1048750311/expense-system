@@ -18,6 +18,7 @@ export interface InitialExpenseData {
   receipt: "yes" | "no";
   amount: number;
   description: string;
+  receiptPath?: string;
 }
 
 interface ExpenseModalProps {
@@ -72,6 +73,16 @@ function inputCls(hasError?: string) {
   }`;
 }
 
+/** URLが画像かどうか判定 */
+function isImageUrl(url: string) {
+  return /\.(jpe?g|png|gif|webp)/i.test(url);
+}
+
+/** URLがPDFかどうか判定 */
+function isPdfUrl(url: string) {
+  return /\.pdf/i.test(url);
+}
+
 export default function ExpenseModal({
   isOpen,
   onClose,
@@ -80,18 +91,20 @@ export default function ExpenseModal({
 }: ExpenseModalProps) {
   const isEditMode = !!initialData;
 
-  // モーダルが開いたとき最初のフィールド（日付）にフォーカス
   const dateInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef  = useRef<HTMLInputElement>(null);
 
   const [categories,   setCategories]   = useState<Category[]>([]);
   const [formData,     setFormData]     = useState<ExpenseFormData>(BLANK_FORM);
   const [formErrors,   setFormErrors]   = useState<FormErrors>({});
   const [file,         setFile]         = useState<File | null>(null);
+  const [previewUrl,   setPreviewUrl]   = useState<string | null>(null);
+  const [isDragOver,   setIsDragOver]   = useState(false);
   const [fileError,    setFileError]    = useState<string>("");
   const [submitError,  setSubmitError]  = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // モーダルが開いたら最初のフィールドにフォーカス
+  // モーダルが開いたら日付フィールドにフォーカス
   useEffect(() => {
     if (isOpen) {
       const timer = setTimeout(() => dateInputRef.current?.focus(), 100);
@@ -106,9 +119,10 @@ export default function ExpenseModal({
     setSubmitError("");
     setFileError("");
     setFile(null);
+    setPreviewUrl(null);
+    setIsDragOver(false);
 
     if (initialData) {
-      // 編集モード: 既存データをフォームにセット
       setFormData({
         date:           initialData.date,
         categoryId:     initialData.categoryId,
@@ -120,10 +134,31 @@ export default function ExpenseModal({
         description:    initialData.description,
       });
     } else {
-      // 新規モード: 空フォーム
       setFormData({ ...BLANK_FORM, date: new Date().toISOString().split("T")[0] });
     }
   }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // BlobURL クリーンアップ
+  useEffect(() => {
+    return () => {
+      if (previewUrl?.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
+  // ★ ウィンドウ全体のドラッグをブロック（ブラウザがファイルを開くのを防ぐ）
+  useEffect(() => {
+    if (!isOpen) return;
+    const prevent = (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    window.addEventListener("dragover", prevent);
+    window.addEventListener("drop", prevent);
+    return () => {
+      window.removeEventListener("dragover", prevent);
+      window.removeEventListener("drop", prevent);
+    };
+  }, [isOpen]);
 
   // カテゴリをAPIから取得
   useEffect(() => {
@@ -133,7 +168,6 @@ export default function ExpenseModal({
       .then((data) => {
         if (data.success && data.data.length > 0) {
           setCategories(data.data);
-          // 新規モードのときだけ先頭カテゴリをデフォルト設定
           if (!isEditMode) {
             setFormData((prev) => ({
               ...prev,
@@ -162,26 +196,56 @@ export default function ExpenseModal({
     clearFieldError("categoryId");
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /** ファイルのバリデーション＋プレビューURL設定 */
+  const processFile = (selected: File) => {
     setFileError("");
-    const selected = e.target.files?.[0];
-    if (!selected) return;
-
     if (!ALLOWED_TYPES.includes(selected.type)) {
       setFileError("jpg、png、pdf のみアップロードできます");
-      e.target.value = "";
       return;
     }
     if (selected.size > MAX_FILE_SIZE) {
       setFileError(
         `ファイルサイズは5MB以下にしてください（現在: ${(selected.size / 1024 / 1024).toFixed(1)}MB）`
       );
-      e.target.value = "";
       return;
     }
+    // 古いBlobURLを解放
+    if (previewUrl?.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
+
     setFile(selected);
+    if (selected.type === "image/jpeg" || selected.type === "image/png") {
+      setPreviewUrl(URL.createObjectURL(selected));
+    } else {
+      setPreviewUrl(null);
+    }
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files?.[0];
+    if (selected) processFile(selected);
+    // 同じファイルを再選択できるようにリセット
+    e.target.value = "";
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    const selected = e.dataTransfer.files?.[0];
+    if (selected) processFile(selected);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -221,6 +285,9 @@ export default function ExpenseModal({
   }, [isOpen, isSubmitting]);
 
   if (!isOpen) return null;
+
+  // 編集モードの既存領収書
+  const existingReceiptUrl = isEditMode ? (initialData?.receiptPath ?? null) : null;
 
   return (
     <div
@@ -401,56 +468,165 @@ export default function ExpenseModal({
                 </div>
               </div>
 
-              {/* 添付ファイル（新規登録のみ） */}
+              {/* ── 新規登録: ファイルアップロードエリア ── */}
               {!isEditMode && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     添付ファイル（領収書）
                   </label>
+
+                  {/* hidden input は常に存在 */}
+                  <input
+                    ref={fileInputRef}
+                    id="file"
+                    name="file"
+                    type="file"
+                    className="sr-only"
+                    accept="image/jpeg,image/png,application/pdf"
+                    onChange={handleFileChange}
+                  />
+
                   <div
-                    className={`mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed rounded-md transition-colors ${
-                      fileError ? "border-red-300" : "border-gray-300 hover:border-gray-400"
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    className={`border-2 border-dashed rounded-lg transition-all ${
+                      fileError
+                        ? "border-red-300 bg-red-50"
+                        : isDragOver
+                        ? "border-green-400 bg-green-50 scale-[1.01]"
+                        : "border-gray-300 hover:border-green-400"
                     }`}
                   >
-                    <div className="space-y-1 text-center">
-                      <svg
-                        className="mx-auto h-12 w-12 text-gray-400"
-                        stroke="currentColor"
-                        fill="none"
-                        viewBox="0 0 48 48"
-                        aria-hidden="true"
-                      >
-                        <path
-                          d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02"
-                          strokeWidth={2}
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
+                    {previewUrl ? (
+                      /* 画像プレビュー */
+                      <div className="flex flex-col items-center gap-3 p-4">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={previewUrl}
+                          alt="プレビュー"
+                          className="max-h-52 w-full rounded-md border border-gray-200 object-contain bg-gray-50"
                         />
-                      </svg>
-                      <div className="flex text-sm text-gray-600 justify-center">
-                        <label
-                          htmlFor="file"
-                          className="relative cursor-pointer bg-white rounded-md font-medium text-green-600 hover:text-green-500 focus-within:outline-none focus-within:ring-2 focus-within:ring-offset-2 focus-within:ring-green-500"
-                        >
-                          <span>ファイルを選択</span>
-                          <input
-                            id="file"
-                            name="file"
-                            type="file"
-                            className="sr-only"
-                            accept="image/jpeg,image/png,application/pdf"
-                            onChange={handleFileChange}
-                          />
-                        </label>
-                        <p className="pl-1">またはドラッグ＆ドロップ</p>
+                        <div className="flex items-center gap-3">
+                          <p className="text-sm text-gray-700 font-medium truncate max-w-[200px]">{file?.name}</p>
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            className="text-xs text-green-600 hover:text-green-700 underline shrink-0"
+                          >
+                            変更
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setFile(null); setPreviewUrl(null); setFileError(""); }}
+                            className="text-xs text-red-500 hover:text-red-600 underline shrink-0"
+                          >
+                            削除
+                          </button>
+                        </div>
                       </div>
-                      <p className="text-xs text-gray-500">JPG、PNG、PDF　最大5MB</p>
-                      {file && (
-                        <p className="text-sm text-green-600 font-medium">選択済み: {file.name}</p>
-                      )}
-                      {fileError && <p className="text-sm text-red-600">{fileError}</p>}
-                    </div>
+                    ) : file ? (
+                      /* PDF選択済み */
+                      <div className="flex items-center gap-3 px-4 py-5">
+                        <svg className="h-10 w-10 text-red-400 shrink-0" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+                          <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
+                        </svg>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-gray-700 font-medium truncate">{file.name}</p>
+                          <p className="text-xs text-gray-400">{(file.size / 1024).toFixed(0)} KB</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="text-xs text-green-600 hover:text-green-700 underline shrink-0"
+                        >
+                          変更
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setFile(null); setPreviewUrl(null); setFileError(""); }}
+                          className="text-xs text-red-500 hover:text-red-600 underline shrink-0"
+                        >
+                          削除
+                        </button>
+                      </div>
+                    ) : (
+                      /* 未選択: クリックまたはドラッグ */
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full flex flex-col items-center gap-2 px-6 py-8 cursor-pointer focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-inset rounded-lg"
+                      >
+                        <svg className="h-10 w-10 text-gray-300" stroke="currentColor" fill="none" viewBox="0 0 48 48" aria-hidden="true">
+                          <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <span className="text-sm text-gray-500">
+                          <span className="font-medium text-green-600">ファイルを選択</span>
+                          {" "}またはドラッグ＆ドロップ
+                        </span>
+                        <span className="text-xs text-gray-400">JPG・PNG・PDF　最大5MB</span>
+                      </button>
+                    )}
                   </div>
+
+                  {fileError && (
+                    <p className="mt-1 text-sm text-red-600">{fileError}</p>
+                  )}
+                </div>
+              )}
+
+              {/* ── 編集モード: 既存領収書を最下部に表示 ── */}
+              {isEditMode && (
+                <div>
+                  <p className="block text-sm font-medium text-gray-700 mb-2">添付ファイル（領収書）</p>
+                  {existingReceiptUrl ? (
+                    isImageUrl(existingReceiptUrl) ? (
+                      /* 画像 */
+                      <div className="rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
+                        <a href={existingReceiptUrl} target="_blank" rel="noopener noreferrer" title="クリックで拡大表示">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={existingReceiptUrl}
+                            alt="領収書"
+                            className="w-full max-h-64 object-contain hover:opacity-90 transition-opacity cursor-zoom-in"
+                          />
+                        </a>
+                        <div className="px-3 py-2 border-t border-gray-200 bg-white flex items-center justify-between">
+                          <span className="text-xs text-gray-500">クリックで拡大表示</span>
+                          <a
+                            href={existingReceiptUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-green-600 hover:text-green-700 underline"
+                          >
+                            新しいタブで開く
+                          </a>
+                        </div>
+                      </div>
+                    ) : isPdfUrl(existingReceiptUrl) ? (
+                      /* PDF */
+                      <a
+                        href={existingReceiptUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors"
+                      >
+                        <svg className="h-8 w-8 text-red-400 shrink-0" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+                          <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" clipRule="evenodd" />
+                        </svg>
+                        <span className="text-sm text-gray-700">PDFを開く</span>
+                        <svg className="h-4 w-4 text-gray-400 ml-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                      </a>
+                    ) : (
+                      <a href={existingReceiptUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-green-600 underline">
+                        ファイルを開く
+                      </a>
+                    )
+                  ) : (
+                    <p className="text-sm text-gray-400 italic">添付ファイルなし</p>
+                  )}
                 </div>
               )}
             </div>

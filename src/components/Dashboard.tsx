@@ -17,6 +17,7 @@ interface ExpenseItem {
   transportation: string;
   tripType: "one-way" | "round-trip";
   receipt: "yes" | "no";
+  receiptPath?: string;
 }
 
 interface Category {
@@ -43,6 +44,7 @@ interface ApiExpense {
   transportType: string | null;
   roundTrip: boolean;
   receiptStatus: string;
+  receiptPath: string | null;
 }
 
 const STATUS_CONFIG = {
@@ -161,6 +163,7 @@ export default function Dashboard() {
             transportation: e.transportType ?? "other",
             tripType:       toTripType(e.roundTrip),
             receipt:        toReceipt(e.receiptStatus),
+            receiptPath:    e.receiptPath ?? undefined,
           }));
           setExpenses(items);
           setPagination(d.data.pagination);
@@ -307,6 +310,7 @@ export default function Dashboard() {
         receipt:        editingExpense.receipt,
         amount:         editingExpense.amount,
         description:    editingExpense.description,
+        receiptPath:    editingExpense.receiptPath,
       }
     : undefined;
 
